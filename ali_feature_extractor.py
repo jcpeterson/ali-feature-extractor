@@ -1,44 +1,60 @@
 #!/usr/bin/env python
 import argparse
 
-import numpy
+import numpy as np
 import theano
 from blocks.serialization import load
-from matplotlib import cm, pyplot
-from mpl_toolkits.axes_grid1 import ImageGrid
 from theano import tensor
 from scipy import misc
-from os import listdir
-from os.path import isfile, join
-import pickle as p
+#import pickle as p
+
+from keras.datasets import cifar10
 
 from ali import streams
 
 
+def image_to_z(image):
 
-
-def image_to_z(main_loop, image):
-
-    """ Perform inference given an image filename. 
+    """ Perform inference given an image array(s)
     """
 
-    ali, = main_loop.model.top_bricks
+    feats = tensor.tensor4('features')
 
-    x = tensor.tensor4('features')
+    params = theano.function([feats], 
+                             (ali.encoder.mapping.apply(feats)), 
+                              allow_input_downcast=True)(image)
 
-    params = theano.function([x], (ali.encoder.mapping.apply(x)), allow_input_downcast=True)(image)
-    mu, log_sigma = params[:, :ali.encoder._nlat], params[:, ali.encoder._nlat:]
-    return mu
+    # z is the mean of a gaussian, so take the mean as the best 
+    # z encoding for the image
+    z_mu = params[:, :ali.encoder._nlat]
+    #log_sigma = params[:, ali.encoder._nlat:]
 
-
-
-def z_to_image(main_loop,z_mu_vector):
-    ali, = main_loop.model.top_bricks
-    decode = ali.decoder.apply(z_mu_vector)
-    finalImage = theano.function([], decode)()
-    return finalImage[0].transpose(1,2,0).squeeze()
+    return z_mu.squeeze()
 
 
+def z_to_image(z):
+
+    """ Decode z vector to an image array
+    """
+
+    decode = ali.decoder.apply(z)
+    image = theano.function([], decode)()
+
+    return image[0].transpose(1,2,0).squeeze()
+
+def load_dummy_images(n=2, fn='1.png'):
+    # read image as list of numpy images: [(32, 32, 3),...]
+    return np.array([misc.imread('1.png') for _ in range(n)])
+
+def preprocess(images):
+    # normalize images to 0-1 range
+    images = images / 255.0 
+    if images.shape[3] == 3:
+        # reshapes to channels first format: (n ,3, 32, 32)
+        return images.transpose(0,3,1,2)
+    else:
+        return images
+        
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Feature extraction using ALI GAN.")
@@ -46,19 +62,29 @@ if __name__ == "__main__":
                         help="path to the pickled main loop.")
     args = parser.parse_args()
 
+    (x_train, y_train), (x_test, y_test) = cifar10.load_data()
+    print 'CIFAR10 test set shape:', x_test.shape
+    x_test = preprocess(x_test)
+    print 'CIFAR10 test set fixed shape:', x_test.shape
 
-    image = [misc.imread('1.png')]
-    print image.shape
-    image = (numpy.array(image)/255.0).transpose(0,3,1,2)
-    print image.shape
-    exit()
+    #dummy_images = load_dummy_images()
+    #print 'Dummy images shape:', dummy_images.shape
+    #dummy_images = preprocess(dummy_images)
+    #print 'Dummy images fixed shape:', dummy_images.shape
 
     with open(args.main_loop_path, 'rb') as src:
         main_loop = load(src)
+    ali, = main_loop.model.top_bricks
+    print('')
+    print('ALI Model Loaded...')
+    print('')
 
-    z_vector = image_to_z(main_loop, args.image_name)
+    zs = image_to_z(x_test)
+    print zs.shape
 
-    #finalImage = z_to_image(main_loop, z_vector)
-    #misc.imsave("6r.png",finalImage)
+    np.savez_compressed('ali_reps.npz', z_vectors=zs)
+    
+    #recon = z_to_image(z)
+    #misc.imsave("recon.png", recon)
 
 
